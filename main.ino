@@ -41,7 +41,13 @@ void setup() {
     dp.setTextAlignment(TEXT_ALIGN_CENTER_BOTH);
 
     readEEPROM();
-    chooseNetwork();
+    if(ssid != ""){
+        updateDisplay(ssid + "\n" + pass);
+        if(!connectToWifi())
+            chooseNetwork();
+    }else{
+        chooseNetwork();
+    }
 }
 
 void loop() {
@@ -56,6 +62,7 @@ void loop() {
         String newTicker = selectWord("Change ticker");
         if(newTicker != ""){
             updateDisplay("Changed ticker to:\n" + newTicker);
+            delay(1000);
             while(true){
                 if(digitalRead(upPin) == LOW || digitalRead(downPin) == LOW){
                     updateDisplay("Action\naborted");
@@ -102,7 +109,7 @@ String truncate(const String str){
 }
 
 String generatePadding(int n){
-    if(n >= 12) return "";
+    if(n <= 12) return "";
     String str = "<";
     n += n * 1.25;
     while(n--) str += '-';
@@ -287,10 +294,6 @@ void readEEPROM(){
         i++;
         while(EEPROM.read(i) != '\0')
             pass += char(EEPROM.read(i++));
-
-        updateDisplay(ssid + "\n" + pass);
-
-        if(connectToWifi()) return;
     }
     EEPROM.end();
 }
