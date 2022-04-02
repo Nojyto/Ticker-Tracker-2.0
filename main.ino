@@ -11,7 +11,7 @@
 //site fingerprint (changes every few months)
 //get it from https://www.grc.com/fingerprints.htm
 #define fingPr     "95 E6 C6 0D D3 9E C0 B2 40 7C 47 66 B5 89 8F 51 72 81 27 A6"
-#define upInterval 300000 //5 min
+#define upInterval 600000 //10 min
 #define upPin      D5
 #define downPin    D7
 #define confirmPin D6
@@ -30,15 +30,6 @@ String pass   = "";
 String ticker = "TSLA";
 
 void setup() {
-    /*pinMode(0, OUTPUT);
-    digitalWrite(0, LOW);
-    pinMode(3, OUTPUT);
-    digitalWrite(3, LOW);
-    pinMode(4, OUTPUT);
-    digitalWrite(4, LOW);
-    pinMode(8, OUTPUT);
-    digitalWrite(8, LOW);*/
-
     pinMode(upPin,      INPUT_PULLUP);
     pinMode(downPin,    INPUT_PULLUP);
     pinMode(confirmPin, INPUT_PULLUP);
@@ -49,35 +40,16 @@ void setup() {
     dp.setFont(ArialMT_Plain_16);
     dp.setTextAlignment(TEXT_ALIGN_CENTER_BOTH);
 
-    EEPROM.begin(4096);
-    if(EEPROM.read(100) == 69){
-        int i = 101;
-        ticker = "";
-        while(EEPROM.read(i) != '\0')
-            ticker += char(EEPROM.read(i++));
-    }
-    if(EEPROM.read(0) == 69){
-        int i = 1;
-        while(EEPROM.read(i) != '\0')
-            ssid += char(EEPROM.read(i++));
-        i++;
-        while(EEPROM.read(i) != '\0')
-            pass += char(EEPROM.read(i++));
-
-        updateDisplay(ssid + "\n" + pass);
-
-        if(connectToWifi()) return;
-    }
-    EEPROM.end();
-
+    readEEPROM();
     chooseNetwork();
 }
 
 void loop() {
     static unsigned long prvTime = upInterval;
     if(millis() - prvTime >= upInterval) {
-        prvTime = millis();
-        makeHTTPRequest();
+        if(makeHTTPRequest())
+            prvTime = millis();
+        delay(7500);
     }
 
     if(digitalRead(confirmPin) == LOW){
@@ -92,19 +64,17 @@ void loop() {
                     ticker = newTicker;
 
                     EEPROM.begin(4096);
-
                     EEPROM.write(100, 69);
                     int i = 101;
                     for(int j = 0; j < ticker.length(); j++)
                         EEPROM.write(i++, ticker[j]);
                     EEPROM.write(i++, '\0');
-                    
                     EEPROM.end();
 
                     updateDisplay("Ticker was\nupdated");
                     break;
                 }
-                delay(25);
+                delay(50);
             }
         }
         prvTime = upInterval;
@@ -122,21 +92,29 @@ void updateDisplay(const String msg){
 }
 
 String truncate(const String str){
-    String trunc = "";
+    if(str.length() <= 12) return str;
 
-    for(int i = 0; i < 8; i++)
+    String trunc = "";
+    for(int i = 0; i < min(12, int(str.length())); i++)
         trunc += str[i];
     trunc += "..";
-
     return trunc;
 }
 
-void makeHTTPRequest(){
+String generatePadding(int n){
+    if(n >= 12) return "";
+    String str = "<";
+    n += n * 1.25;
+    while(n--) str += '-';
+    return str;
+}
+
+bool makeHTTPRequest(){
     updateDisplay("Fetching data...");
 
     if(!client.connect(host, 443)){
         updateDisplay("Connection\nfailed.");
-        return;
+        return false;
     }
     
     yield();
@@ -147,12 +125,12 @@ void makeHTTPRequest(){
 
     if(client.println() == 0){
         updateDisplay("Failed to send\nrequest.");
-        return;
+        return false;
     }
 
     if(!client.find("\r\n\r\n")){
         updateDisplay("Invalid\nresponse.");
-        return;
+        return false;
     }
 
     DynamicJsonDocument doc(512);
@@ -165,29 +143,53 @@ void makeHTTPRequest(){
         stockChange = "+" + stockChange;
 
     updateDisplay(ticker + "\n" + stockValue + "\n" + stockChange);
+
+    return true;
 }
 
 String selectWord(const String header){
-    String word = "";
-    int i = 0;
     static const String abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789~!@#$%^&*";
-    static const int n = 70 + 2;
+    static const int n = 70 + 3;
+    int i = 0, j = 0;
+    String word = "";
 
     delay(300);
 
     while(true){
-        if(i == n - 1){
-            updateDisplay(header + "\n" + word + "\n" + "Confirm");
-        }else if(i == n){
-            updateDisplay(header + "\n" + "Cancel?");
-        }else{
-            updateDisplay(header + "\n" + word + abc[i]);
+        switch (i){
+            case n - 2:
+                updateDisplay(header + "\n" + word + "\n" + "Remove char?");
+                break;
+            case n - 1:
+                updateDisplay(header + "\n" + word + "\n" + "Confirm");
+                break;
+            case n:
+                updateDisplay("Cancel input?");
+                break;
+            default:
+                updateDisplay(header + "\n" + word + abc[i] + generatePadding(word.length() + 1));
+                break;
         }
 
         if(digitalRead(confirmPin) == LOW){
-            if(i == n - 1) return word;
-            if(i == n)     return "";
-            word += abc[i];
+            if(word.length() > 63){
+                updateDisplay("Max password\nlength reached.");
+                delay(1000);
+                continue;
+            }
+            switch (i){
+                case n - 2:
+                    if(word.length() > 0)
+                        word.remove(word.length() - 1);
+                    break;
+                case n - 1:
+                    return word;
+                case n:
+                    return "";
+                default:
+                    word += abc[i];
+                    break;
+            }
             delay(300);
         }else if(digitalRead(upPin) == LOW){
             if(--i < 0) i = n;
@@ -221,7 +223,7 @@ void chooseNetwork(){
         if(digitalRead(confirmPin) == LOW){
             ssid = WiFi.SSID(i);
             if(ssid == "") ESP.restart();
-            pass = selectWord(ssid);
+            pass = selectWord(truncate(ssid));
             break;
         }else if(digitalRead(upPin) == LOW){
             if(--i < 0) i = n - 1;
@@ -268,4 +270,27 @@ bool connectToWifi(){
     EEPROM.end();
 
     return true;
+}
+
+void readEEPROM(){
+    EEPROM.begin(4096);
+    if(EEPROM.read(100) == 69){
+        int i = 101;
+        ticker = "";
+        while(EEPROM.read(i) != '\0')
+            ticker += char(EEPROM.read(i++));
+    }
+    if(EEPROM.read(0) == 69){
+        int i = 1;
+        while(EEPROM.read(i) != '\0')
+            ssid += char(EEPROM.read(i++));
+        i++;
+        while(EEPROM.read(i) != '\0')
+            pass += char(EEPROM.read(i++));
+
+        updateDisplay(ssid + "\n" + pass);
+
+        if(connectToWifi()) return;
+    }
+    EEPROM.end();
 }
